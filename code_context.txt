@@ -1,0 +1,1381 @@
+// File: src/components/AIResponseArea.js
+import React from 'react';
+
+const AIResponseArea = ({ conversation, isLoading }) => {
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
+
+  if (!conversation || conversation.length === 0) {
+    return <div>No conversation</div>;
+  }
+
+  const lastMessage = conversation[conversation.length - 1];
+  const { answer, score, start, end } = lastMessage?.answer || {};
+
+  if (!answer) {
+    return <div>No answer</div>;
+  }
+
+  return (
+    <div>
+      <h2>Answer:</h2>
+      <p>{answer}</p>
+      {score !== undefined && <p>Score: {score}</p>}
+      {start !== undefined && <p>Start: {start}</p>}
+      {end !== undefined && <p>End: {end}</p>}
+    </div>
+  );
+};
+
+export default AIResponseArea;
+// File: src/components/FileUpload.js
+import React, { useState, useRef } from 'react';
+import { FiFile, FiCheckCircle } from 'react-icons/fi';
+
+const FileUpload = ({ onFileUpload, isLoading }) => {
+  const [dragActive, setDragActive] = useState(false);
+  const [fileUploaded, setFileUploaded] = useState(false);
+  const [fileName, setFileName] = useState('');
+  const inputRef = useRef(null);
+
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0] && e.dataTransfer.files[0].type === 'application/pdf') {
+      processFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleChange = (e) => {
+    e.preventDefault();
+    if (e.target.files && e.target.files[0]) {
+      processFile(e.target.files[0]);
+    }
+  };
+
+  const processFile = (file) => {
+    setFileName(file.name);
+    setFileUploaded(true);
+    onFileUpload(file);
+  };
+
+  const onButtonClick = () => {
+    inputRef.current.click();
+  };
+
+  return (
+    <div className="w-full max-w-xl mx-auto mb-8">
+      <div 
+        className={`flex flex-col items-center justify-center w-full h-64 border-2 border-dashed rounded-lg transition-colors p-6
+          ${dragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-gray-50'}
+          ${fileUploaded ? 'bg-green-50 border-green-300' : ''}`}
+        onDragEnter={handleDrag}
+        onDragLeave={handleDrag}
+        onDragOver={handleDrag}
+        onDrop={handleDrop}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept="application/pdf"
+          onChange={handleChange}
+          className="hidden"
+          id="file-upload"
+          aria-label="Upload PDF file"
+        />
+
+        {fileUploaded ? (
+          <div className="flex flex-col items-center justify-center text-center">
+            <FiCheckCircle className="w-12 h-12 mb-3 text-green-500" />
+            <p className="mb-2 text-sm text-gray-700">
+              <span className="font-semibold">{fileName}</span> uploaded successfully
+            </p>
+            <button
+              onClick={onButtonClick}
+              className="text-sm text-blue-600 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2"
+              disabled={isLoading}
+            >
+              Upload a different file
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center text-center">
+            <FiFile className="w-12 h-12 mb-3 text-gray-400" />
+            <p className="mb-2 text-sm text-gray-500">
+              <span className="font-semibold">Click to upload</span> or drag and drop
+            </p>
+            <p className="text-xs text-gray-500">PDF files only</p>
+
+            <button
+              type="button"
+              onClick={onButtonClick}
+              className="mt-4 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={isLoading}
+            >
+              {isLoading ? 'Processing...' : 'Select PDF'}
+            </button>
+          </div>
+        )}
+      </div>
+      
+      {/* Accessibility label */}
+      <p id="file-upload-desc" className="sr-only">
+        Upload a PDF document to have the AI mentor read it and answer questions about it.
+      </p>
+    </div>
+  );
+};
+
+export default FileUpload;
+// File: src/components/PDFViewer.js
+import React, { useEffect, useRef, useState } from 'react';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
+import 'react-pdf/dist/esm/Page/TextLayer.css';
+
+// Set worker source to local file
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+
+const PDFViewer = ({ 
+  pdfFile, 
+  currentPage, 
+  numPages, 
+  goToPage, 
+  currentReadingPosition,
+  isReading
+}) => {
+  const [pageWidth, setPageWidth] = useState(600);
+  const [pageHeight, setPageHeight] = useState(800);
+  const containerRef = useRef(null);
+  const textLayerRef = useRef(null);
+  const [scale, setScale] = useState(1);
+  
+  useEffect(() => {
+    const updateDimensions = () => {
+      if (containerRef.current) {
+        const width = containerRef.current.clientWidth;
+        setPageWidth(width > 800 ? 800 : width - 32);
+      }
+    };
+
+    window.addEventListener('resize', updateDimensions);
+    updateDimensions();
+    
+    return () => window.removeEventListener('resize', updateDimensions);
+  }, []);
+
+  // Handle highlighting of current reading position
+  useEffect(() => {
+    if (textLayerRef.current && currentReadingPosition) {
+      // Clear previous highlights
+      const prevHighlighted = textLayerRef.current.querySelectorAll('.highlighted-text');
+      prevHighlighted.forEach(el => {
+        el.classList.remove('highlighted-text');
+      });
+      
+      // Find the text elements that match the current reading position
+      const textElements = textLayerRef.current.querySelectorAll('.react-pdf__Page__textContent span');
+      
+      // This is simplified logic - in a real app, you'd need a more sophisticated 
+      // approach to find and highlight the exact position
+      if (currentReadingPosition && currentReadingPosition.text) {
+        const textToFind = currentReadingPosition.text;
+        
+        textElements.forEach(element => {
+          if (element.textContent.includes(textToFind)) {
+            element.classList.add('highlighted-text');
+            
+            // Scroll into view if needed
+            if (isReading) {
+              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }
+        });
+      }
+    }
+  }, [currentReadingPosition, isReading, currentPage]);
+
+  const onDocumentLoadSuccess = ({ numPages }) => {
+    console.log(`Document loaded with ${numPages} pages`);
+  };
+
+  return (
+    <div 
+      ref={containerRef} 
+      className="pdf-container w-full overflow-auto border rounded-lg bg-gray-50 shadow-inner"
+      aria-label="PDF Document Viewer"
+      tabIndex="0"
+    >
+      {pdfFile ? (
+        <Document
+          file={pdfFile}
+          onLoadSuccess={onDocumentLoadSuccess}
+          className="flex flex-col items-center py-4"
+        >
+          <div className="controls mb-4 flex items-center justify-center space-x-4">
+            <button
+              onClick={() => goToPage(currentPage - 1)}
+              disabled={currentPage <= 1}
+              className="px-3 py-1 bg-blue-600 text-white rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
+              aria-label="Previous page"
+            >
+              Previous
+            </button>
+            
+            <span className="text-sm">
+              Page {currentPage} of {numPages}
+            </span>
+            
+            <button
+              onClick={() => goToPage(currentPage + 1)}
+              disabled={currentPage >= numPages}
+              className="px-3 py-1 bg-blue-600 text-white rounded disabled:bg-gray-300 disabled:cursor-not-allowed"
+              aria-label="Next page"
+            >
+              Next
+            </button>
+            
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setScale(Math.max(0.5, scale - 0.1))}
+                className="px-2 py-1 bg-gray-200 rounded"
+                aria-label="Zoom out"
+              >
+                -
+              </button>
+              <span className="text-sm">{Math.round(scale * 100)}%</span>
+              <button
+                onClick={() => setScale(Math.min(2, scale + 0.1))}
+                className="px-2 py-1 bg-gray-200 rounded"
+                aria-label="Zoom in"
+              >
+                +
+              </button>
+            </div>
+          </div>
+          
+          <div ref={textLayerRef} className="relative">
+            <Page 
+              pageNumber={currentPage} 
+              width={pageWidth * scale}
+              scale={scale}
+              renderTextLayer={true}
+              renderAnnotationLayer={true}
+            />
+          </div>
+        </Document>
+      ) : (
+        <div className="flex items-center justify-center h-64 text-gray-500">
+          Please upload a PDF file
+        </div>
+      )}
+      
+      <style jsx global>{`
+        .highlighted-text {
+          background-color: rgba(255, 230, 0, 0.4);
+          border-radius: 2px;
+        }
+        
+        .react-pdf__Page {
+          margin-bottom: 16px;
+          box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+        }
+        
+        .react-pdf__Page__canvas {
+          margin: 0 auto;
+        }
+        
+        .react-pdf__Page__textContent {
+          pointer-events: none;
+        }
+      `}</style>
+    </div>
+  );
+};
+
+export default PDFViewer;
+// File: src/components/PlaybackControls.js
+import React, { useState } from 'react';
+import { 
+  FiPlay, 
+  FiPause, 
+  FiSkipBack, 
+  FiSkipForward, 
+  FiVolume2, 
+  FiVolumeX,
+  FiRefreshCw
+} from 'react-icons/fi';
+
+const PlaybackControls = ({
+  isReading,
+  startReading,
+  pauseReading,
+  resumeReading,
+  stopReading,
+  skipForward,
+  skipBackward,
+  volume,
+  changeVolume,
+  rate,
+  changeRate,
+  disabled
+}) => {
+  const [isMuted, setIsMuted] = useState(false);
+  const [previousVolume, setPreviousVolume] = useState(1);
+
+  const handleVolumeChange = (e) => {
+    const newVolume = parseFloat(e.target.value);
+    changeVolume(newVolume);
+    
+    if (newVolume === 0) {
+      setIsMuted(true);
+    } else {
+      setIsMuted(false);
+    }
+  };
+
+  const toggleMute = () => {
+    if (isMuted) {
+      // Unmute
+      changeVolume(previousVolume > 0 ? previousVolume : 0.5);
+      setIsMuted(false);
+    } else {
+      // Mute
+      setPreviousVolume(volume);
+      changeVolume(0);
+      setIsMuted(true);
+    }
+  };
+
+  const handleRateChange = (e) => {
+    const newRate = parseFloat(e.target.value);
+    changeRate(newRate);
+  };
+
+  return (
+    <div className="w-full bg-gray-100 rounded-lg p-4 shadow-md" role="region" aria-label="Playback controls">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-medium">Playback Controls</h3>
+      </div>
+      
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* Main playback controls */}
+        <div className="flex items-center justify-around space-x-4">
+          <button
+            onClick={skipBackward}
+            disabled={disabled}
+            className="p-3 rounded-full bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Skip backward"
+          >
+            <FiSkipBack className="w-5 h-5" />
+          </button>
+          
+          {isReading ? (
+            <button
+              onClick={pauseReading}
+              disabled={disabled}
+              className="p-4 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Pause reading"
+            >
+              <FiPause className="w-6 h-6" />
+            </button>
+          ) : (
+            <button
+              onClick={isReading ? resumeReading : startReading}
+              disabled={disabled}
+              className="p-4 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Start reading"
+            >
+              <FiPlay className="w-6 h-6" />
+            </button>
+          )}
+          
+          <button
+            onClick={skipForward}
+            disabled={disabled}
+            className="p-3 rounded-full bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Skip forward"
+          >
+            <FiSkipForward className="w-5 h-5" />
+          </button>
+          
+          <button
+            onClick={stopReading}
+            disabled={disabled}
+            className="p-3 rounded-full bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
+            aria-label="Stop reading"
+          >
+            <FiRefreshCw className="w-5 h-5" />
+          </button>
+        </div>
+        
+        {/* Volume and rate controls */}
+        <div className="space-y-3">
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={toggleMute}
+              className="p-2 rounded-full bg-gray-200 hover:bg-gray-300"
+              aria-label={isMuted ? "Unmute" : "Mute"}
+            >
+              {isMuted ? <FiVolumeX className="w-5 h-5" /> : <FiVolume2 className="w-5 h-5" />}
+            </button>
+            
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={handleVolumeChange}
+              className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer"
+              aria-label="Volume control"
+            />
+            
+            <span className="text-sm w-8 text-right">
+              {Math.round(volume * 100)}%
+            </span>
+          </div>
+          
+          <div className="flex items-center space-x-3">
+            <span className="text-sm">Speed:</span>
+            
+            <input
+              type="range"
+              min="0.5"
+              max="2"
+              step="0.1"
+              value={rate}
+              onChange={handleRateChange}
+              className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer"
+              aria-label="Speech rate control"
+            />
+            
+            <span className="text-sm w-8 text-right">
+              {rate}x
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default PlaybackControls;
+// File: src/components/QuestionInput.js
+import React, { useState } from 'react';
+import { FiSend, FiLoader } from 'react-icons/fi';
+
+const QuestionInput = ({ onAskQuestion, isLoading, disabled }) => {
+  const [question, setQuestion] = useState('');
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (question.trim() && !isLoading) {
+      onAskQuestion(question);
+      setQuestion('');
+    }
+  };
+
+  return (
+    <div className="w-full" aria-label="Ask a question about the document">
+      <form onSubmit={handleSubmit} className="relative">
+        <input
+          type="text"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          placeholder="Ask a question about the document..."
+          disabled={disabled || isLoading}
+          className="w-full p-4 pr-12 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+          aria-label="Question input"
+        />
+        <button
+          type="submit"
+          disabled={disabled || isLoading || !question.trim()}
+          className="absolute right-2 top-1/2 transform -translate-y-1/2 p-2 rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          aria-label="Submit question"
+        >
+          {isLoading ? (
+            <FiLoader className="w-5 h-5 animate-spin" />
+          ) : (
+            <FiSend className="w-5 h-5" />
+          )}
+        </button>
+      </form>
+    </div>
+  );
+};
+
+export default QuestionInput;
+// File: src/hooks/useAIIntegration.js
+import { useState, useCallback } from 'react';
+import axios from 'axios';
+
+const useAIIntegration = (pdfText) => {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [answer, setAnswer] = useState('');
+  const [conversation, setConversation] = useState([]);
+
+  // Process the document to create context for the AI
+  const prepareContext = useCallback(() => {
+    if (!pdfText || pdfText.length === 0) {
+      return 'No document content available.';
+    }
+
+    // Create a condensed version of the PDF text for the AI context
+    return pdfText.map(page => {
+      const pageContent = Array.isArray(page.content) 
+        ? page.content.map(item => item.text || '').join(' ')
+        : (typeof page.content === 'string' ? page.content : 'Empty page');
+      return `[Page ${page.pageNumber}] ${pageContent}`;
+    }).join('\n\n').slice(0, 10000); // Limit to 10k characters
+  }, [pdfText]);
+
+  // Ask a question to the AI
+  const askQuestion = useCallback(async (question) => {
+    if (!question.trim()) {
+      setError('Please provide a question');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Safely prepare context even if pdfText is not as expected
+      let context = "No document content available.";
+      try {
+        context = prepareContext();
+      } catch (err) {
+        console.error('Error preparing context:', err);
+      }
+      
+      // Add the question to conversation history
+      const newConversation = [
+        ...conversation,
+        { role: 'user', content: question }
+      ];
+      
+      setConversation(newConversation);
+
+      console.log('Sending request to API with:', {
+        conversation: newConversation,
+        contextLength: context.length
+      });
+
+      // Send request to the AI service
+      const response = await axios.post('/api/query-ai', {
+        conversation: newConversation,
+        context: context,
+      });
+
+      console.log('API Response:', response.data);
+
+      const aiResponse = response.data || { answer: "Sorry, I couldn't process your question." };
+      
+      // Update conversation with AI's answer
+      setConversation(prev => [
+        ...prev,
+        { role: 'assistant', answer: aiResponse }
+      ]);
+      
+      setAnswer(aiResponse);
+    } catch (err) {
+      console.error('Error querying AI:', err);
+      // Add more detailed error logging
+      if (err.response) {
+        console.error('Response data:', err.response.data);
+        console.error('Response status:', err.response.status);
+        console.error('Response headers:', err.response.headers);
+        setError(`Error ${err.response.status}: ${err.response.data.error || 'Unknown error'}`);
+      } else if (err.request) {
+        console.error('Request was made but no response received');
+        setError('No response received from server. Please try again.');
+      } else {
+        console.error('Error message:', err.message);
+        setError(`Error: ${err.message}`);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [pdfText, conversation, prepareContext]);
+
+  // Clear conversation
+  const clearConversation = useCallback(() => {
+    setConversation([]);
+    setAnswer('');
+    setError(null);
+  }, []);
+
+  return {
+    askQuestion,
+    clearConversation,
+    answer,
+    conversation,
+    isLoading,
+    error
+  };
+};
+
+export default useAIIntegration;
+// File: src/hooks/usePDFProcessor.js
+import { useState, useCallback } from 'react';
+import * as pdfjs from 'pdfjs-dist';
+import { GlobalWorkerOptions } from 'pdfjs-dist';
+
+// Configure the worker properly for Next.js environment
+if (typeof window !== 'undefined') {
+  // Only load the worker in browser environment
+  GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+}
+// Ensure PDF.js worker is available
+// const pdfjsWorker = await import('pdfjs-dist/build/pdf.worker.entry');
+// pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+const usePDFProcessor = () => {
+  const [pdfText, setPdfText] = useState([]);
+  const [pdfFile, setPdfFile] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState(null);
+  const [numPages, setNumPages] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const processPDF = useCallback(async (file) => {
+    setIsProcessing(true);
+    setError(null);
+    setPdfFile(file);
+
+    try {
+      const fileReader = new FileReader();
+      
+      fileReader.onload = async function() {
+        const typedArray = new Uint8Array(this.result);
+        
+        try {
+          const pdf = await pdfjs.getDocument({ data: typedArray }).promise;
+          setNumPages(pdf.numPages);
+          
+          const allPages = [];
+          
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            
+            // Process text items and maintain some structure
+            const pageText = textContent.items.map(item => {
+              return {
+                text: item.str,
+                x: item.transform[4], // x-coordinate
+                y: item.transform[5], // y-coordinate
+                fontSize: item.transform[0], // Font size approximation
+                pageNumber: i
+              };
+            });
+            
+            // Sort by y-coordinate (top to bottom) then x-coordinate (left to right)
+            pageText.sort((a, b) => {
+              // Group items into lines based on y-coordinate proximity
+              const yDiff = Math.abs(a.y - b.y);
+              if (yDiff < 5) { // Items on the same line (adjust threshold as needed)
+                return a.x - b.x; // Sort left to right
+              }
+              return b.y - a.y; // Sort top to bottom
+            });
+            
+            allPages.push({
+              pageNumber: i,
+              content: pageText
+            });
+          }
+          
+          setPdfText(allPages);
+          setIsProcessing(false);
+        } catch (err) {
+          console.error('Error processing PDF:', err);
+          setError('Failed to process the PDF. Please try another file.');
+          setIsProcessing(false);
+        }
+      };
+      
+      fileReader.onerror = () => {
+        setError('Error reading file');
+        setIsProcessing(false);
+      };
+      
+      fileReader.readAsArrayBuffer(file);
+    } catch (err) {
+      setError('Error processing the file');
+      setIsProcessing(false);
+    }
+  }, []);
+
+  // Get plain text representation (for AI processing)
+  const getPlainText = useCallback(() => {
+    return pdfText.map(page => {
+      const pageContent = page.content.map(item => item.text).join(' ');
+      return `[Page ${page.pageNumber}] ${pageContent}`;
+    }).join('\n\n');
+  }, [pdfText]);
+  
+  // Navigate to a specific page
+  const goToPage = useCallback((pageNum) => {
+    if (pageNum >= 1 && pageNum <= numPages) {
+      setCurrentPage(pageNum);
+    }
+  }, [numPages]);
+
+  return {
+    processPDF,
+    pdfText,
+    getPlainText,
+    isProcessing,
+    error,
+    numPages,
+    currentPage,
+    goToPage,
+    pdfFile
+  };
+};
+
+export default usePDFProcessor;
+// File: src/hooks/useTextToSpeech.js
+import { useState, useEffect, useCallback, useRef } from 'react';
+
+const useTextToSpeech = (pdfText) => {
+  const [isReading, setIsReading] = useState(false);
+  const [currentPosition, setCurrentPosition] = useState(null);
+  const [volume, setVolume] = useState(1);
+  const [rate, setRate] = useState(1);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [currentTextIndex, setCurrentTextIndex] = useState(0);
+  
+  const synth = useRef(null);
+  const utterance = useRef(null);
+  const textQueue = useRef([]);
+  const isMounted = useRef(true);
+
+  // Initialize speech synthesis
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      synth.current = window.speechSynthesis;
+    }
+    
+    return () => {
+      isMounted.current = false;
+      if (synth.current) {
+        synth.current.cancel();
+      }
+    };
+  }, []);
+
+  // Process PDF text into speakable chunks
+  useEffect(() => {
+    if (!pdfText || pdfText.length === 0) return;
+    
+    // Reset state when new PDF is loaded
+    setCurrentPage(1);
+    setCurrentTextIndex(0);
+    
+    // Process text into speakable chunks
+    const chunks = [];
+    
+    pdfText.forEach(page => {
+      // Group by paragraphs or meaningful sections
+      let currentParagraph = '';
+      let lastY = null;
+      
+      page.content.forEach(item => {
+        // If y position changes significantly, it's likely a new paragraph
+        if (lastY !== null && Math.abs(lastY - item.y) > 10) {
+          if (currentParagraph.trim().length > 0) {
+            chunks.push({
+              text: currentParagraph.trim(),
+              pageNumber: page.pageNumber
+            });
+          }
+          currentParagraph = item.text;
+        } else {
+          currentParagraph += ' ' + item.text;
+        }
+        
+        lastY = item.y;
+      });
+      
+      // Don't forget the last paragraph
+      if (currentParagraph.trim().length > 0) {
+        chunks.push({
+          text: currentParagraph.trim(),
+          pageNumber: page.pageNumber
+        });
+      }
+    });
+    
+    textQueue.current = chunks;
+  }, [pdfText]);
+
+  // Handle utterance events
+  const setupUtterance = useCallback((text, pageNumber, index) => {
+    if (!synth.current) return null;
+    
+    const newUtterance = new SpeechSynthesisUtterance(text);
+    newUtterance.volume = volume;
+    newUtterance.rate = rate;
+    
+    // Use first available voice or let the browser choose
+    const voices = synth.current.getVoices();
+    if (voices.length > 0) {
+      newUtterance.voice = voices[0];
+    }
+    
+    // Set up event handlers
+    newUtterance.onstart = () => {
+      if (isMounted.current) {
+        setIsReading(true);
+        setCurrentPosition({ text, pageNumber, index });
+        setCurrentPage(pageNumber);
+      }
+    };
+    
+    newUtterance.onend = () => {
+      if (isMounted.current) {
+        // Move to next text chunk
+        if (index < textQueue.current.length - 1) {
+          const nextIndex = index + 1;
+          const nextChunk = textQueue.current[nextIndex];
+          setCurrentTextIndex(nextIndex);
+          
+          // Speak next chunk
+          setupUtterance(nextChunk.text, nextChunk.pageNumber, nextIndex);
+        } else {
+          // End of document
+          setIsReading(false);
+          setCurrentPosition(null);
+        }
+      }
+    };
+    
+    newUtterance.onerror = (event) => {
+      console.error('Speech synthesis error:', event);
+      if (isMounted.current) {
+        setIsReading(false);
+      }
+    };
+    
+    // Store the utterance
+    utterance.current = newUtterance;
+    
+    // Speak
+    synth.current.speak(newUtterance);
+    
+    return newUtterance;
+  }, [volume, rate]);
+
+  // Control functions
+  const startReading = useCallback(() => {
+    if (!synth.current || textQueue.current.length === 0) return;
+    
+    // Cancel any current speech
+    synth.current.cancel();
+    
+    // Start from current position
+    const chunk = textQueue.current[currentTextIndex];
+    setupUtterance(chunk.text, chunk.pageNumber, currentTextIndex);
+  }, [currentTextIndex, setupUtterance]);
+
+  const pauseReading = useCallback(() => {
+    if (!synth.current) return;
+    synth.current.pause();
+    setIsReading(false);
+  }, []);
+
+  const resumeReading = useCallback(() => {
+    if (!synth.current) return;
+    synth.current.resume();
+    setIsReading(true);
+  }, []);
+
+  const stopReading = useCallback(() => {
+    if (!synth.current) return;
+    synth.current.cancel();
+    setIsReading(false);
+    setCurrentPosition(null);
+  }, []);
+
+  const changeVolume = useCallback((newVolume) => {
+    setVolume(newVolume);
+    if (utterance.current) {
+      utterance.current.volume = newVolume;
+    }
+  }, []);
+
+  const changeRate = useCallback((newRate) => {
+    setRate(newRate);
+    if (utterance.current) {
+      utterance.current.rate = newRate;
+    }
+  }, []);
+
+  const skipForward = useCallback(() => {
+    if (!textQueue.current.length) return;
+    
+    // Skip to next paragraph
+    const nextIndex = Math.min(currentTextIndex + 1, textQueue.current.length - 1);
+    setCurrentTextIndex(nextIndex);
+    
+    // Stop current speech
+    synth.current.cancel();
+    
+    // If was reading, start reading from new position
+    if (isReading) {
+      const chunk = textQueue.current[nextIndex];
+      setupUtterance(chunk.text, chunk.pageNumber, nextIndex);
+    }
+  }, [currentTextIndex, isReading, setupUtterance]);
+
+  const skipBackward = useCallback(() => {
+    if (!textQueue.current.length) return;
+    
+    // Skip to previous paragraph
+    const prevIndex = Math.max(currentTextIndex - 1, 0);
+    setCurrentTextIndex(prevIndex);
+    
+    // Stop current speech
+    synth.current.cancel();
+    
+    // If was reading, start reading from new position
+    if (isReading) {
+      const chunk = textQueue.current[prevIndex];
+      setupUtterance(chunk.text, chunk.pageNumber, prevIndex);
+    }
+  }, [currentTextIndex, isReading, setupUtterance]);
+
+  const jumpToPage = useCallback((pageNumber) => {
+    if (!textQueue.current.length) return;
+    
+    // Find the first text chunk on the requested page
+    const index = textQueue.current.findIndex(chunk => chunk.pageNumber === pageNumber);
+    if (index !== -1) {
+      setCurrentTextIndex(index);
+      setCurrentPage(pageNumber);
+      
+      // Stop current speech
+      synth.current.cancel();
+      
+      // If was reading, start reading from new position
+      if (isReading) {
+        const chunk = textQueue.current[index];
+        setupUtterance(chunk.text, pageNumber, index);
+      }
+    }
+  }, [isReading, setupUtterance]);
+
+  return {
+    isReading,
+    currentPosition,
+    volume,
+    rate,
+    currentPage,
+    startReading,
+    pauseReading,
+    resumeReading,
+    stopReading,
+    changeVolume,
+    changeRate,
+    skipForward,
+    skipBackward,
+    jumpToPage
+  };
+};
+
+export default useTextToSpeech;
+// File: src/pages/api/extract-text.js
+import formidable from 'formidable';
+import fs from 'fs';
+import path from 'path';
+import { PDFDocument } from 'pdf-lib';
+
+// Disable the default body parser
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    // Parse form with uploaded file
+    const form = new formidable.IncomingForm();
+    form.keepExtensions = true;
+    
+    const [fields, files] = await new Promise((resolve, reject) => {
+      form.parse(req, (err, fields, files) => {
+        if (err) reject(err);
+        resolve([fields, files]);
+      });
+    });
+
+    if (!files.pdf) {
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    // Get the temporary path of the uploaded file
+    const filePath = files.pdf.filepath;
+    
+    // Read the file
+    const pdfBytes = fs.readFileSync(filePath);
+    
+    // Load the PDF document
+    const pdfDoc = await PDFDocument.load(pdfBytes);
+    
+    // Get the number of pages
+    const numPages = pdfDoc.getPageCount();
+    
+    // Extract text from each page
+    // Note: This is a simplified approach - PDF.js provides more accurate text extraction
+    // For production use, consider using pdf.js on the server or sending the PDF to a service
+    
+    // Return metadata about the PDF
+    return res.status(200).json({
+      numPages,
+      message: 'File processed successfully',
+    });
+  } catch (error) {
+    console.error('Error extracting PDF text:', error);
+    return res.status(500).json({ error: 'Error processing the PDF' });
+  }
+}
+// File: src/pages/api/query-ai.js
+// src/pages/api/query-ai.js
+import axios from 'axios';
+
+// Your API key from Hugging Face
+const apiKey = process.env.HUGGING_FACE_API_KEY;
+
+// Initialize the pipeline with your model and API key
+const query = async (question, context) => {
+  const response = await axios.post('https://api-inference.huggingface.co/models/deepset/bert-base-cased-squad2', {
+    inputs: {
+      question: question,
+      context: context
+    },
+    options: {
+      wait_for_model: true,
+      use_cache: true
+    }
+  }, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`
+    }
+  });
+
+  return response.data;
+};
+
+export default async function handler(req, res) {
+  if (req.method!== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const { conversation, context } = req.body;
+
+    if (!conversation ||!context) {
+      return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    // Log the request payload
+    console.log('Request Payload:', { conversation, context });
+
+    const question = conversation[conversation.length - 1]?.content;
+    const answer = await query(question, context);
+
+    // Log the response
+    console.log('Response:', answer);
+
+    // Return a successful response
+    return res.status(200).json({ answer });
+  } catch (error) {
+    console.error('API handler error:', error);
+    return res.status(500).json({ 
+      error: 'Internal server error',
+      details: error.message 
+    });
+  }
+}
+// File: src/pages/api/text-to-speech.js
+// This endpoint would normally connect to a text-to-speech service like Google TTS
+// For this implementation, we'll use the browser's built-in TTS capabilities
+// This endpoint could be used if you want server-side TTS generation
+
+export default async function handler(req, res) {
+    if (req.method !== 'POST') {
+      return res.status(405).json({ error: 'Method not allowed' });
+    }
+  
+    try {
+      const { text } = req.body;
+  
+      if (!text) {
+        return res.status(400).json({ error: 'No text provided' });
+      }
+  
+      // In a real implementation, you would:
+      // 1. Call a TTS service API (Google, Azure, etc.)
+      // 2. Get the audio file or stream
+      // 3. Return it to the client
+      
+      // For now, we'll just acknowledge the request
+      return res.status(200).json({ 
+        message: 'Text-to-speech request received',
+        // In a real implementation:
+        // audioUrl: 'url-to-generated-audio'
+      });
+    } catch (error) {
+      console.error('Error in text-to-speech:', error);
+      return res.status(500).json({ error: 'Error processing your request' });
+    }
+  }
+// File: src/pages/_app.js
+import React from 'react';
+import { AppProps } from 'next/app';
+import '../polyfills';
+import '../styles/globals.css'; // Include if you have global styles
+
+function MyApp({ Component, pageProps }) {
+  return <Component {...pageProps} />;
+}
+
+export default MyApp;
+// File: src/pages/_document.js
+import { Html, Head, Main, NextScript } from 'next/document';
+
+export default function Document() {
+  return (
+    <Html lang="en">
+      <Head />
+      <body>
+        <Main />
+        <NextScript />
+      </body>
+    </Html>
+  );
+}
+// File: src/pages/index.js
+import { useState, useEffect } from 'react';
+import Head from 'next/head';
+import FileUpload from '../components/FileUpload';
+import PDFViewer from '../components/PDFViewer';
+import PlaybackControls from '../components/PlaybackControls';
+import QuestionInput from '../components/QuestionInput';
+import AIResponseArea from '../components/AIResponseArea';
+import usePDFProcessor from '../hooks/usePDFProcessor';
+import useTextToSpeech from '../hooks/useTextToSpeech';
+import useAIIntegration from '../hooks/useAIIntegration';
+
+export default function Home() {
+  const {
+    processPDF,
+    pdfText,
+    getPlainText,
+    isProcessing,
+    error: pdfError,
+    numPages,
+    currentPage,
+    goToPage,
+    pdfFile,
+  } = usePDFProcessor();
+
+  const {
+    isReading,
+    currentPosition,
+    volume,
+    rate,
+    startReading,
+    pauseReading,
+    resumeReading,
+    stopReading,
+    changeVolume,
+    changeRate,
+    skipForward,
+    skipBackward,
+    jumpToPage,
+  } = useTextToSpeech(pdfText);
+
+  const {
+    askQuestion,
+    clearConversation,
+    conversation,
+    isLoading: aiLoading,
+    error: aiError,
+  } = useAIIntegration(pdfText);
+
+  const [processingState, setProcessingState] = useState('idle');
+  
+  // Handle initial loading state
+  useEffect(() => {
+    if (isProcessing) {
+      setProcessingState('processing');
+    } else if (pdfText.length > 0) {
+      setProcessingState('ready');
+    } else {
+      setProcessingState('idle');
+    }
+  }, [isProcessing, pdfText]);
+
+  // Handle PDF upload
+  const handleFileUpload = async (file) => {
+    stopReading();
+    clearConversation();
+    await processPDF(file);
+  };
+
+  // Handle page navigation from playback
+  useEffect(() => {
+    if (currentPosition && currentPosition.pageNumber !== currentPage) {
+      goToPage(currentPosition.pageNumber);
+    }
+  }, [currentPosition, currentPage, goToPage]);
+
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <Head>
+        <title>PDF Reading Mentor</title>
+        <meta name="description" content="Interactive PDF reader with AI capabilities" />
+        <link rel="icon" href="/favicon.ico" />
+      </Head>
+
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+          <h1 className="text-3xl font-bold text-gray-900">PDF Reading Mentor</h1>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {/* Left column: PDF viewer */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* File upload section */}
+            <section aria-labelledby="upload-section">
+              <FileUpload 
+                onFileUpload={handleFileUpload} 
+                isLoading={isProcessing} 
+              />
+              {pdfError && (
+                <div className="mt-2 text-red-600 text-sm">{pdfError}</div>
+              )}
+            </section>
+
+            {/* PDF viewer */}
+            <section aria-labelledby="pdf-viewer-section" className="h-[600px]">
+              <PDFViewer
+                pdfFile={pdfFile}
+                currentPage={currentPage}
+                numPages={numPages}
+                goToPage={goToPage}
+                currentReadingPosition={currentPosition}
+                isReading={isReading}
+              />
+            </section>
+          </div>
+
+          {/* Right column: Controls and AI interaction */}
+          <div className="space-y-6">
+            {/* Playback controls */}
+            <section aria-labelledby="playback-controls-section">
+              <PlaybackControls
+                isReading={isReading}
+                startReading={startReading}
+                pauseReading={pauseReading}
+                resumeReading={resumeReading}
+                stopReading={stopReading}
+                skipForward={skipForward}
+                skipBackward={skipBackward}
+                volume={volume}
+                changeVolume={changeVolume}
+                rate={rate}
+                changeRate={changeRate}
+                disabled={processingState !== 'ready'}
+              />
+            </section>
+
+            {/* AI interaction section */}
+            <section aria-labelledby="ai-interaction-section" className="space-y-4">
+              <h2 className="text-lg font-medium">Ask the AI Mentor</h2>
+              <QuestionInput
+                onAskQuestion={askQuestion}
+                isLoading={aiLoading}
+                disabled={processingState !== 'ready'}
+              />
+              {aiError && (
+                <div className="text-red-600 text-sm">{aiError}</div>
+              )}
+              <AIResponseArea
+                conversation={conversation}
+                isLoading={aiLoading}
+              />
+            </section>
+          </div>
+        </div>
+      </main>
+
+      <footer className="bg-white mt-12 py-6 border-t">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <p className="text-center text-gray-500 text-sm">
+            PDF Reading Mentor - Interactive PDF reader with AI capabilities
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+}
+// File: src/polyfills.js
+if (!Promise.withResolvers) {
+    Promise.withResolvers = function() {
+      let resolve, reject;
+      const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
+  }
+
+
+  if (typeof DOMMatrix === 'undefined') {
+    global.DOMMatrix = class {
+      constructor() {
+        this.a = 1;
+        this.b = 0;
+        this.c = 0;
+        this.d = 1;
+        this.e = 0;
+        this.f = 0;
+      }
+      
+      // Add any additional methods or properties as needed
+    };
+  }
+// File: src/styles/globals.css
+
+// File: src/utils/accessibilityHelpers.js
+
+// File: src/utils/pdfHelpers.js
+
